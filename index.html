@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>曜の部屋</title>
+<meta name="description" content="a parallel life — Stacey 沒活成的另一面">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header class="site">
+    <h1>曜の部屋</h1>
+    <p class="sub">a parallel life · since 1981</p>
+  </header>
+
+  <article id="post" class="loading"></article>
+
+  <section class="archive">
+    <h3>過去的日子</h3>
+    <ol id="archive-list"></ol>
+  </section>
+
+  <footer>不打氣 · 不總結 · 不建議</footer>
+</main>
+
+<script>
+async function fetchIndex() {
+  const r = await fetch('posts/index.json', { cache: 'no-store' });
+  if (!r.ok) throw new Error('index.json missing');
+  return r.json();
+}
+
+async function fetchPost(date) {
+  const r = await fetch(`posts/${date}.md`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`post ${date} missing`);
+  return r.text();
+}
+
+function parseFrontmatter(src) {
+  const m = src.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!m) return { meta: {}, body: src };
+  const meta = {};
+  m[1].split(/\r?\n/).forEach(line => {
+    const i = line.indexOf(':');
+    if (i > 0) meta[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  });
+  return { meta, body: m[2] };
+}
+
+function escape(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function inline(s) {
+  return escape(s)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|\W)\*([^*\n]+?)\*(?=\W|$)/g, '$1<em>$2</em>')
+    .replace(/(^|\W)_([^_\n]+?)_(?=\W|$)/g, '$1<em>$2</em>')
+    .replace(/`([^`]+?)`/g, '<code>$1</code>')
+    .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+function md2html(src) {
+  const lines = src.split(/\r?\n/);
+  const out = [];
+  let para = [];
+  let listType = null;
+  const flushPara = () => {
+    if (para.length) {
+      out.push(`<p>${inline(para.join(' '))}</p>`);
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (listType) {
+      out.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+  for (const ln of lines) {
+    const t = ln.replace(/\s+$/, '');
+    if (!t.trim()) { flushPara(); flushList(); continue; }
+    if (/^#### /.test(t))   { flushPara(); flushList(); out.push(`<h4>${inline(t.slice(5))}</h4>`); continue; }
+    if (/^### /.test(t))    { flushPara(); flushList(); out.push(`<h3>${inline(t.slice(4))}</h3>`); continue; }
+    if (/^## /.test(t))     { flushPara(); flushList(); out.push(`<h2>${inline(t.slice(3))}</h2>`); continue; }
+    if (/^# /.test(t))      { flushPara(); flushList(); out.push(`<h2>${inline(t.slice(2))}</h2>`); continue; }
+    if (/^> /.test(t))      { flushPara(); flushList(); out.push(`<blockquote>${inline(t.slice(2))}</blockquote>`); continue; }
+    if (/^---+$/.test(t))   { flushPara(); flushList(); out.push('<hr>'); continue; }
+    const ulMatch = t.match(/^[-*]\s+(.+)$/);
+    const olMatch = t.match(/^\d+\.\s+(.+)$/);
+    if (ulMatch) {
+      flushPara();
+      if (listType !== 'ul') { flushList(); out.push('<ul>'); listType = 'ul'; }
+      out.push(`<li>${inline(ulMatch[1])}</li>`);
+      continue;
+    }
+    if (olMatch) {
+      flushPara();
+      if (listType !== 'ol') { flushList(); out.push('<ol>'); listType = 'ol'; }
+      out.push(`<li>${inline(olMatch[1])}</li>`);
+      continue;
+    }
+    flushList();
+    para.push(t);
+  }
+  flushPara();
+  flushList();
+  return out.join('\n');
+}
+
+const META_ORDER = ['date', 'weather', 'mood', 'listening'];
+
+function renderPost(meta, bodyHtml) {
+  const post = document.getElementById('post');
+  const metaRows = META_ORDER
+    .filter(k => meta[k])
+    .map(k => `<div class="row"><span class="label">${k}</span><span class="val">${escape(meta[k])}</span></div>`)
+    .join('');
+  post.classList.add('loading');
+  setTimeout(() => {
+    post.innerHTML = (metaRows ? `<div class="meta">${metaRows}</div>` : '') + bodyHtml;
+    post.classList.remove('loading');
+  }, 120);
+  if (meta.date) document.title = `曜 · ${meta.date}`;
+}
+
+async function renderArchive(posts, currentDate) {
+  const list = document.getElementById('archive-list');
+  const others = posts.filter(p => p !== currentDate);
+  if (!others.length) {
+    list.innerHTML = '<li class="empty">— 還沒有別的日子 —</li>';
+    return;
+  }
+  const moods = await Promise.all(others.map(async d => {
+    try {
+      const txt = await fetchPost(d);
+      const { meta } = parseFrontmatter(txt);
+      return { date: d, mood: meta.mood || '' };
+    } catch {
+      return { date: d, mood: '' };
+    }
+  }));
+  list.innerHTML = moods.map(m =>
+    `<li><a href="#${m.date}"><span class="date">${m.date}</span><span class="mood">${escape(m.mood)}</span></a></li>`
+  ).join('');
+}
+
+async function showDate(date, posts) {
+  try {
+    const txt = await fetchPost(date);
+    const { meta, body } = parseFrontmatter(txt);
+    renderPost(meta, md2html(body));
+    await renderArchive(posts, date);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (e) {
+    document.getElementById('post').innerHTML = `<p><em>${escape(date)} 那天的日記不在這裡。</em></p>`;
+  }
+}
+
+async function init() {
+  try {
+    const idx = await fetchIndex();
+    const posts = idx.posts || [];
+    if (!posts.length) {
+      document.getElementById('post').innerHTML = '<p><em>還沒有日記。曜大概在睡覺。</em></p>';
+      return;
+    }
+    const initial = location.hash.slice(1) || posts[0];
+    await showDate(initial, posts);
+    window.addEventListener('hashchange', async () => {
+      const d = location.hash.slice(1);
+      if (d) await showDate(d, posts);
+    });
+  } catch (e) {
+    document.getElementById('post').innerHTML = `<p><em>${escape(e.message)}</em></p>`;
+  }
+}
+
+init();
+</script>
+</body>
+</html>
